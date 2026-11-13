@@ -1,0 +1,39 @@
+version: 2
+
+project_name: zcco
+
+builds:
+  - id: zcco
+    builder: rust
+    binary: zcco
+    command: build
+    flags:
+      - --release
+      - --locked
+    targets:
+      - aarch64-apple-darwin
+      - x86_64-apple-darwin
+
+archives:
+  - id: archive
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
+  github:
+    owner: zhangbyby
+    name: zcco

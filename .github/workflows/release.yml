@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check release prerequisites
+        env:
+          HOMEBREW_TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+        run: |
+          if [[ "$GITHUB_REF_NAME" != *-* ]] && [ -z "$HOMEBREW_TAP_SSH_KEY" ]; then
+            echo "::error::Set HOMEBREW_TAP_SSH_KEY to the dedicated write deploy key for zhangbyby/homebrew-tap."
+            exit 1
+          fi
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Release tag must match Cargo.toml version: v$version"
+            exit 1
+          fi
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          components: rustfmt, clippy
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Build and publish release
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.20.2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate stable Homebrew formula
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: python3 scripts/generate_homebrew.py --version "${GITHUB_REF_NAME#v}"
+
+      - name: Checkout Homebrew tap
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: actions/checkout@v4
+        with:
+          repository: zhangbyby/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+          path: .tap
+
+      - name: Update stable Homebrew formula
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          mkdir -p .tap/Formula
+          cp dist/zcco.rb .tap/Formula/zcco.rb
+          cd .tap
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/zcco.rb
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "chore: update zcco to $GITHUB_REF_NAME"
+          for attempt in 1 2 3; do
+            echo "Pushing Homebrew formula (attempt $attempt/3)"
+            if git push; then
+              exit 0
+            fi
+            git pull --rebase
+          done
+          exit 1
